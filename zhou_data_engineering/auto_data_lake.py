@@ -1,73 +1,59 @@
 import os
 import logging
-import time
+import asyncio
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List, Optional
 import polars as pl
 from tvDatafeed import TvDatafeed, Interval
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
+# 載入 .env 檔案中的環境變數
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ZeroTouchDataLake")
 
-# -------------------------------------------------------------------------
-# 1. Zero-Touch Environment & Logging Setup
-# -------------------------------------------------------------------------
-# Set up autonomous directory creation relative to the script's execution path
-BASE_DIR = Path(__file__).resolve().parent if '__file__' in globals() else Path.cwd()
-DATA_LAKE_PATH = BASE_DIR / "market_data_lake"
-LOGS_PATH = BASE_DIR / "logs"
-
-# Ensure directories exist without user intervention
-DATA_LAKE_PATH.mkdir(parents=True, exist_ok=True)
-LOGS_PATH.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOGS_PATH / "data_lake_builder.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# -------------------------------------------------------------------------
-# 2. Pipeline Architecture
-# -------------------------------------------------------------------------
 class ZeroTouchDataLake:
-    def __init__(self, storage_path: Path):
-        self.storage_path = storage_path
+    def __init__(self, data_dir: Optional[str] = None):
+        """
+        初始化非同步資料湖建構器
+        """
+        if data_dir is None:
+            self.data_dir = Path(__file__).resolve().parent / "market_data_lake"
+        else:
+            self.data_dir = Path(data_dir)
+            
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
         tv_username = os.getenv("TV_USERNAME")
         tv_password = os.getenv("TV_PASSWORD")
         
         if tv_username and tv_password:
-            logger.info("Initializing TvDatafeed (Authenticated Mode)...")
+            logger.info("[i] 已偵測到 API 金鑰/帳密，將啟用驗證連線 (Authenticated Mode)。")
             self.tv = TvDatafeed(username=tv_username, password=tv_password)
         else:
-            logger.info("Initializing TvDatafeed (Anonymous Mode)...")
+            logger.info("[i] 未偵測到帳密，將使用公開連線抓取數據 (Anonymous Mode)。")
             self.tv = TvDatafeed() 
-            
-        logger.info(f"Storage path automatically resolved to: {self.storage_path}")
 
-    def fetch_base_data(self, symbol: str, exchange: str, n_bars: int = 5000, max_retries: int = 5, retry_delay: int = 10) -> pl.DataFrame:
+    async def fetch_historical_15m_async(self, symbol: str, exchange: str, n_bars: int = 10000) -> pl.DataFrame:
         """
-        Fetches 15-minute K-line data, applies structural lookahead-bias defense,
-        and includes robust retry mechanisms.
+        [非同步抓取] 具備指數退避重試的歷史拉取
         """
-        logger.info(f"[{symbol}:{exchange}] Fetching {n_bars} raw 15m bars...")
+        logger.info(f"[*] 開始抓取 {symbol}:{exchange} 15m 數據...")
         
+        max_retries = 5
         df_pd = None
+        
         for attempt in range(1, max_retries + 1):
             try:
-                df_pd = self.tv.get_hist(
+                # tvDatafeed 是同步的，我們使用 asyncio.to_thread 讓它不阻塞 Event Loop
+                df_pd = await asyncio.to_thread(
+                    self.tv.get_hist,
                     symbol=symbol,
                     exchange=exchange,
                     interval=Interval.in_15_minute,
                     n_bars=n_bars
                 )
                 
-                # Check if data is valid
                 if df_pd is not None and not df_pd.empty:
                     logger.info(f"[{symbol}:{exchange}] Successfully fetched data on attempt {attempt}.")
                     break
@@ -75,113 +61,119 @@ class ZeroTouchDataLake:
                     logger.warning(f"[{symbol}:{exchange}] Attempt {attempt}: API returned empty data.")
                     
             except Exception as e:
-                # Enhanced error logging
-                logger.error(f"[{symbol}:{exchange}] Attempt {attempt} failed! Error reason: {str(e)}")
+                logger.error(f"[{symbol}:{exchange}] 嘗試 {attempt} 失敗! 錯誤: {e}")
                 
             if attempt < max_retries:
-                logger.info(f"[{symbol}:{exchange}] Retrying in {retry_delay} seconds (Attempt {attempt + 1}/{max_retries})...")
-                time.sleep(retry_delay)
+                wait_time = 2 ** attempt
+                logger.info(f"[{symbol}:{exchange}] 網路或速率限制，等待 {wait_time} 秒後重試...")
+                await asyncio.sleep(wait_time)
             else:
-                logger.error(f"[{symbol}:{exchange}] All {max_retries} attempts failed. Giving up on this asset.")
+                logger.error(f"[{symbol}:{exchange}] 放棄抓取：達到最大重試次數。")
 
         if df_pd is None or df_pd.empty:
-            raise ValueError(f"No data returned for {symbol} on {exchange} after {max_retries} attempts. Possible rate limit or symbol delisted.")
-        
+            raise ValueError(f"No data returned for {symbol} on {exchange}.")
+            
         # Reset index and clean up Pandas DataFrame
         df_pd = df_pd.reset_index()
         if 'symbol' in df_pd.columns:
             df_pd = df_pd.drop(columns=['symbol'])
             
-        # Convert to Polars and standardize columns
         df = pl.from_pandas(df_pd)
         df = df.rename({col: col.lower() for col in df.columns})
         
         # ---------------------------------------------------------------------
-        # LOOKAHEAD-BIAS DEFENSE:
-        # We strictly exclude the last fetched row. In live quantitative environments,
-        # the final candle is still 'forming' and its Close price is an illusion. 
-        # Using it causes lookahead bias.
+        # LOOKAHEAD-BIAS DEFENSE: 剃除最後一根未收盤的 K 線
         # ---------------------------------------------------------------------
         df = df.slice(0, df.height - 1)
-        
-        # Ensure temporal ordering
         return df.sort("datetime")
 
-    def resample_and_store(self, df: pl.DataFrame, symbol: str, timeframes: List[str]):
+    def generate_multi_timeframes(self, df_15m: pl.DataFrame) -> Dict[str, pl.DataFrame]:
         """
-        Engineers multi-timeframe features via Polars and sinks them to Parquet.
+        [SOTA 升級] 多時間尺度重採樣，並強制寫入物理結束時間 (Close Time)
         """
-        # Autonomous symbol partition creation
-        symbol_dir = self.storage_path / symbol
-        symbol_dir.mkdir(parents=True, exist_ok=True)
+        timeframes = ["30m", "60m", "4h", "1d"]
         
-        # Sink base 15m data
-        base_path = symbol_dir / f"{symbol}_15m.parquet"
-        df.write_parquet(base_path)
-        logger.info(f"[{symbol}] Sinked base 15m -> {base_path.name} ({df.height} rows)")
-
-        # Generate rolled-up timeframes
+        # 1. 賦予基準 15m 線 close_time
+        df_15m = df_15m.with_columns(
+            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).alias("close_time")
+        )
+        results = {"15m": df_15m}
+        
         for tf in timeframes:
-            logger.info(f"[{symbol}] Polars Resampling -> {tf} timeframe...")
+            # Polars group_by_dynamic 預設以區間的起始點 (Open Time) 作為標籤
+            df_tf = df_15m.group_by_dynamic("datetime", every=tf, closed="left", label="left").agg([
+                pl.col("open").first(),
+                pl.col("high").max(),
+                pl.col("low").min(),
+                pl.col("close").last(),
+                pl.col("volume").sum()
+            ]).drop_nulls()
             
-            # ---------------------------------------------------------------------
-            # MULTI-TIMEFRAME RESAMPLING:
-            # We use group_by_dynamic. closed="left" and label="left" are critical
-            # to ensure the timestamp of the new bar points to the START of the 
-            # period, strictly enforcing temporal boundaries.
-            # ---------------------------------------------------------------------
-            resampled_df = (
-                df.group_by_dynamic("datetime", every=tf, closed="left", label="left")
-                .agg([
-                    pl.col("open").first().alias("open"),
-                    pl.col("high").max().alias("high"),
-                    pl.col("low").min().alias("low"),
-                    pl.col("close").last().alias("close"),
-                    pl.col("volume").sum().alias("volume")
-                ])
-                .drop_nulls()  # Drop non-trading periods generated by the grouper
+            # 2. 賦予宏觀 K 線 close_time
+            df_tf = df_tf.with_columns(
+                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time")
             )
+            results[tf] = df_tf
             
-            tf_path = symbol_dir / f"{symbol}_{tf}.parquet"
-            resampled_df.write_parquet(tf_path)
-            logger.info(f"[{symbol}] Sinked {tf} -> {tf_path.name} ({resampled_df.height} rows)")
+        return results
 
-    def run_automation(self, target_assets: List[Dict[str, str]]):
+    def save_to_datalake(self, symbol: str, datasets: Dict[str, pl.DataFrame]):
+        """寫入本地 Parquet"""
+        symbol_safe = symbol.replace("/", "_")
+        asset_dir = self.data_dir / symbol_safe
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        
+        for tf, df in datasets.items():
+            file_path = asset_dir / f"{symbol_safe}_{tf}.parquet"
+            df.write_parquet(str(file_path))
+            logger.info(f"[v] 保存完成: {file_path.name} ({len(df)} 筆)")
+
+    async def process_single_asset(self, symbol: str, exchange: str):
+        """單一資產的完整生命週期管線"""
+        try:
+            # 1. 網路 I/O: 非同步抓取
+            raw_15m_df = await self.fetch_historical_15m_async(symbol, exchange, n_bars=10000)
+            
+            if len(raw_15m_df) == 0:
+                logger.warning(f"[{symbol}] 無資料可處理。")
+                return
+
+            # 2. CPU 密集型: 降維、多週期生成與加入 close_time (使用極速 Polars)
+            multi_tf_datasets = self.generate_multi_timeframes(raw_15m_df)
+            
+            # 3. 磁碟 I/O: 儲存
+            self.save_to_datalake(symbol, multi_tf_datasets)
+            
+        except Exception as e:
+            logger.error(f"[{symbol}] 致命錯誤與處理失敗: {e}")
+
+    async def build_multi_asset_lake(self, assets: List[Dict[str, str]]):
         """
-        Master orchestration method for the data pipeline.
+        [多核極限] 同時併發下載與處理多檔資產
         """
-        logger.info("Starting Zero-Touch Data Pipeline...")
-        success_count = 0
+        logger.info(f"[🚀] 啟動多資產非同步資料湖建構管線: {[a['symbol'] for a in assets]}")
+        
+        # 使用 asyncio.gather 同時發起所有資產的下載與處理任務
+        tasks = [self.process_single_asset(asset['symbol'], asset['exchange']) for asset in assets]
+        await asyncio.gather(*tasks)
+        
+        logger.info("[🏁] 所有資產資料湖建構完畢！")
 
-        for asset in target_assets:
-            symbol = asset['symbol']
-            exchange = asset['exchange']
-            try:
-                # 1. Extraction & Cleaning
-                # max_retries=5 means we'll try up to 5 times (1 initial + 4 retries)
-                df_15m = self.fetch_base_data(symbol, exchange, n_bars=10000, max_retries=5, retry_delay=10)
-                
-                # 2. Multi-Timeframe Transformation & Loading (30m, 60m, 4h, 1d)
-                self.resample_and_store(df_15m, symbol, timeframes=["30m", "60m", "4h", "1d"])
-                success_count += 1
-                
-            except Exception as e:
-                logger.error(f"Pipeline entirely failed for {symbol}: {str(e)}")
-                continue
 
-        logger.info(f"Pipeline Execution Finished. Successfully processed {success_count}/{len(target_assets)} assets.")
-
-# -------------------------------------------------------------------------
-# 3. Execution Entry Point
-# -------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Define Target Assets (Taiwanese Equities Example)
+    # 在 Windows 避免非同步報錯
+    import sys
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    # 目標台股資產
     target_equities = [
         {"symbol": "2330", "exchange": "TWSE"},  # TSMC (台積電)
         {"symbol": "2308", "exchange": "TWSE"},  # Delta Electronics (台達電)
         {"symbol": "2454", "exchange": "TWSE"}   # MediaTek (聯發科)
     ]
     
-    # Initialize and run
-    pipeline = ZeroTouchDataLake(storage_path=DATA_LAKE_PATH)
-    pipeline.run_automation(target_equities)
+    builder = ZeroTouchDataLake()
+    
+    # 啟動非同步事件迴圈
+    asyncio.run(builder.build_multi_asset_lake(target_equities))

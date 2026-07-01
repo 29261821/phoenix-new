@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import List, Dict
 import polars as pl
 from tvDatafeed import TvDatafeed, Interval
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 # -------------------------------------------------------------------------
 # 1. Zero-Touch Environment & Logging Setup
@@ -34,9 +37,17 @@ logger = logging.getLogger(__name__)
 class ZeroTouchDataLake:
     def __init__(self, storage_path: Path):
         self.storage_path = storage_path
-        logger.info("Initializing TvDatafeed (Anonymous Mode)...")
-        # Retry logic or exception catching can be added here if TvDatafeed faces network issues
-        self.tv = TvDatafeed() 
+        
+        tv_username = os.getenv("TV_USERNAME")
+        tv_password = os.getenv("TV_PASSWORD")
+        
+        if tv_username and tv_password:
+            logger.info("Initializing TvDatafeed (Authenticated Mode)...")
+            self.tv = TvDatafeed(username=tv_username, password=tv_password)
+        else:
+            logger.info("Initializing TvDatafeed (Anonymous Mode)...")
+            self.tv = TvDatafeed() 
+            
         logger.info(f"Storage path automatically resolved to: {self.storage_path}")
 
     def fetch_base_data(self, symbol: str, exchange: str, n_bars: int = 5000, max_retries: int = 5, retry_delay: int = 10) -> pl.DataFrame:

@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional
 import polars as pl
+import pandas as pd
 from tvDatafeed import TvDatafeed, Interval
 from dotenv import load_dotenv
 
@@ -79,23 +80,62 @@ class ZeroTouchDataLake:
         if 'symbol' in df_pd.columns:
             df_pd = df_pd.drop(columns=['symbol'])
             
+        # ---------------------------------------------------------------------
+        # 防禦機制 1: Timezone Naïveté (時區裸奔與 8 小時未來視)
+        # 強制標記 Asia/Taipei 並轉換為 UTC
+        # ---------------------------------------------------------------------
+        if df_pd['datetime'].dt.tz is None:
+            df_pd['datetime'] = df_pd['datetime'].dt.tz_localize('Asia/Taipei').dt.tz_convert('UTC')
+        else:
+            df_pd['datetime'] = df_pd['datetime'].dt.tz_convert('UTC')
+            
         df = pl.from_pandas(df_pd)
         df = df.rename({col: col.lower() for col in df.columns})
         
-        # ---------------------------------------------------------------------
-        # LOOKAHEAD-BIAS DEFENSE: 剃除最後一根未收盤的 K 線
-        # ---------------------------------------------------------------------
+        # 剃除最後一根未收盤的 K 線，防止未來視
         df = df.slice(0, df.height - 1)
         df = df.sort("datetime")
+        return df
+
+    def apply_intraday_interpolation(self, df_15m: pl.DataFrame) -> pl.DataFrame:
+        """
+        防禦機制 2: 動態日曆萃取與盤中插值引擎 (Ghost Gap Interpolator)
+        針對台灣股市: 09:00 - 13:15, 每 15 分鐘一根, 共 18 根
+        """
+        # 萃取有交易的營業日 (透過 Asia/Taipei 來判定確實的日期，避開跨日問題)
+        unique_dates = df_15m.select(
+            pl.col("datetime").dt.convert_time_zone("Asia/Taipei").dt.date().alias("trading_date")
+        ).unique().sort("trading_date")
+
+        # 生成該營業日的絕對刻度 (09:00 到 13:15 Asia/Taipei，然後轉回 UTC)
+        master_timeline = unique_dates.select([
+            pl.datetime_ranges(
+                pl.col("trading_date").cast(pl.Datetime).dt.replace_time_zone("Asia/Taipei").dt.offset_by("9h"),
+                pl.col("trading_date").cast(pl.Datetime).dt.replace_time_zone("Asia/Taipei").dt.offset_by("13h15m"),
+                interval="15m",
+                eager=False
+            ).alias("datetime")
+        ]).explode("datetime").with_columns(
+            pl.col("datetime").dt.convert_time_zone("UTC")
+        )
+
+        # 進行 Left Join，找出缺口
+        df_merged = master_timeline.join(df_15m, on="datetime", how="left")
         
-        # ---------------------------------------------------------------------
-        # 對齊組長的資料豐富度 (Data Richness): 加入特徵遮罩
-        # ---------------------------------------------------------------------
-        df = df.with_columns([
+        # 填補特徵與標記 (自首機制)
+        df_filled = df_merged.with_columns([
             (pl.col("close").is_not_null() & (pl.col("volume") > 0)).alias("features_mask"),
             pl.when(pl.col("close").is_null()).then(3).otherwise(0).cast(pl.Int8).alias("features_reason"),
-        ])
-        return df
+        ]).with_columns([
+            pl.col("close").fill_null(strategy="forward"),
+            pl.col("volume").fill_null(0.0)
+        ]).with_columns([
+            pl.col("open").fill_null(pl.col("close")),
+            pl.col("high").fill_null(pl.col("close")),
+            pl.col("low").fill_null(pl.col("close"))
+        ]).drop_nulls(subset=["close"])  # 防呆：如果當天第一筆剛好遺失，移除之
+        
+        return df_filled
 
     def generate_micro_timeframes(self, df_15m: pl.DataFrame) -> Dict[str, pl.DataFrame]:
         """
@@ -103,14 +143,16 @@ class ZeroTouchDataLake:
         """
         timeframes = ["30m", "60m", "4h"]
         
-        # 1. 賦予基準 15m 線 close_time
-        df_15m = df_15m.with_columns(
-            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).alias("close_time")
-        )
+        # 賦予 15m 雙軌時間與 close_time
+        df_15m = df_15m.with_columns([
+            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).alias("close_time"),
+            pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
+            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+        ])
         results = {"15m": df_15m}
         
         for tf in timeframes:
-            # Polars group_by_dynamic 預設以區間的起始點 (Open Time) 作為標籤
+            # Polars group_by_dynamic 在 UTC 時區下進行聚合非常完美
             df_tf = df_15m.group_by_dynamic("datetime", every=tf, closed="left", label="left").agg([
                 pl.col("open").first(),
                 pl.col("high").max(),
@@ -121,10 +163,12 @@ class ZeroTouchDataLake:
                 pl.col("features_reason").max() 
             ]).drop_nulls()
             
-            # 2. 賦予宏觀 K 線 close_time
-            df_tf = df_tf.with_columns(
-                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time")
-            )
+            # 賦予聚合後 K 線的雙軌時間
+            df_tf = df_tf.with_columns([
+                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time"),
+                pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
+                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+            ])
             results[tf] = df_tf
             
         return results
@@ -144,23 +188,35 @@ class ZeroTouchDataLake:
     async def process_single_asset(self, symbol: str, exchange: str):
         """單一資產的雙軌抓取與處理"""
         try:
-            # 1. 網路 I/O: 抓取微觀 15m 資料 (上限 10,000 根，約 2.2 年)
+            # 1. 網路 I/O: 抓取微觀 15m 資料
             raw_15m_df = await self.fetch_historical_async(symbol, exchange, Interval.in_15_minute, n_bars=10000)
             
-            # 2. 網路 I/O: 獨立抓取宏觀 1d 資料 (5,000 根，約 20 年)
+            # 2. 網路 I/O: 獨立抓取宏觀 1d 資料
             raw_1d_df = await self.fetch_historical_async(symbol, exchange, Interval.in_daily, n_bars=5000)
             
-            # CPU 密集型: 處理微觀時間尺度 (15m -> 30m, 60m, 4h) 並加入 close_time
-            datasets = self.generate_micro_timeframes(raw_15m_df)
+            if len(raw_15m_df) == 0:
+                logger.warning(f"[{symbol}] 無 15m 資料可處理。")
+                return
+
+            # 3. 執行盤中幽靈缺口填補引擎 (針對 15m)
+            filled_15m_df = self.apply_intraday_interpolation(raw_15m_df)
+
+            # 4. 生成多週期 (並套用雙軌時間)
+            datasets = self.generate_micro_timeframes(filled_15m_df)
             
-            # 處理宏觀時間尺度 (1d)，並加入 close_time
+            # 5. 處理宏觀時間尺度 (1d)
             if len(raw_1d_df) > 0:
-                raw_1d_df = raw_1d_df.with_columns(
-                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).alias("close_time")
-                )
+                raw_1d_df = raw_1d_df.with_columns([
+                    (pl.col("close").is_not_null() & (pl.col("volume") > 0)).alias("features_mask"),
+                    pl.when(pl.col("close").is_null()).then(3).otherwise(0).cast(pl.Int8).alias("features_reason"),
+                ]).with_columns([
+                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).alias("close_time"),
+                    pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
+                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+                ])
                 datasets["1d"] = raw_1d_df
 
-            # 磁碟 I/O: 儲存
+            # 6. 磁碟 I/O: 儲存
             self.save_to_datalake(symbol, exchange, datasets)
             
         except Exception as e:

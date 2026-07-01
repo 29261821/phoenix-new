@@ -86,7 +86,16 @@ class ZeroTouchDataLake:
         # LOOKAHEAD-BIAS DEFENSE: 剃除最後一根未收盤的 K 線
         # ---------------------------------------------------------------------
         df = df.slice(0, df.height - 1)
-        return df.sort("datetime")
+        df = df.sort("datetime")
+        
+        # ---------------------------------------------------------------------
+        # 對齊組長的資料豐富度 (Data Richness): 加入特徵遮罩
+        # ---------------------------------------------------------------------
+        df = df.with_columns([
+            (pl.col("close").is_not_null() & (pl.col("volume") > 0)).alias("features_mask"),
+            pl.when(pl.col("close").is_null()).then(3).otherwise(0).cast(pl.Int8).alias("features_reason"),
+        ])
+        return df
 
     def generate_micro_timeframes(self, df_15m: pl.DataFrame) -> Dict[str, pl.DataFrame]:
         """
@@ -107,7 +116,9 @@ class ZeroTouchDataLake:
                 pl.col("high").max(),
                 pl.col("low").min(),
                 pl.col("close").last(),
-                pl.col("volume").sum()
+                pl.col("volume").sum(),
+                pl.col("features_mask").any(),
+                pl.col("features_reason").max() 
             ]).drop_nulls()
             
             # 2. 賦予宏觀 K 線 close_time

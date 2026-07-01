@@ -92,6 +92,9 @@ class ZeroTouchDataLake:
         df = pl.from_pandas(df_pd)
         df = df.rename({col: col.lower() for col in df.columns})
         
+        # 強制將 datetime 的精度轉換為微秒 (us)，以避免與 pl.datetime_ranges (us) 發生 Join 失敗
+        df = df.with_columns(pl.col("datetime").cast(pl.Datetime("us", "UTC")))
+        
         # 剃除最後一根未收盤的 K 線，防止未來視
         df = df.slice(0, df.height - 1)
         df = df.sort("datetime")

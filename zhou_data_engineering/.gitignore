@@ -1,0 +1,5 @@
+market_data_lake/
+logs/
+__pycache__/
+*.parquet
+*.log

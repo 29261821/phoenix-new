@@ -1,0 +1,98 @@
+# ==============================================================================
+# 鳳凰計畫 - R²NA_Lite 輕量作戰配置 v1.0 (Part 1)
+# 目標：為樹模型 (LightGBM/XGBoost) 提供無未來視、已對齊、無雜訊的高質量寬表
+# ==============================================================================
+domain: 'crypto'
+suite: 'R2NA_Lite'
+
+# ----------------------------------------------------------------------------
+# §1 時間戰略 (Warm-up 保障)
+# ----------------------------------------------------------------------------
+phase1_window:
+  # 確保即使是最長 256 週期的指標，在實盤第一筆推論時也不會有 NaN
+  warmup_bars: 300 
+  training_years: 2
+
+# ----------------------------------------------------------------------------
+# §2 市場會話與時間框架 (Market Session & Timeframes)
+# ----------------------------------------------------------------------------
+market_session:
+  'BTC/USDT':
+    timezone: 'UTC' # 加密貨幣 24/7，無明顯收盤時間
+
+timeframes:
+  - '1m'   # 基準時間
+  - '5m'
+  - '15m'
+  - '1h'
+  - '4h'
+  - '1d'
+
+# ----------------------------------------------------------------------------
+# §3 核心指標預設參數憲法 (Indicator Default Parameters Constitution)
+# [說明]: Lite 版精選具備明確物理意義與市場結構的特徵，避免共線性爆炸。
+# ----------------------------------------------------------------------------
+indicator_default_params:
+  # 動能與趨勢
+  RSI: { source: 'close', period: 14 }
+  MACD: { source: 'close', fast_period: 12, slow_period: 26, signal_period: 9 }
+  EMA_Cluster: { source: 'close', len1: 8, len2: 21, len3: 55 }
+  
+  # 波動率與通道
+  Bollinger_Bands: { source: 'close', period: 20, std: 2.0 }
+  ATR: { Len: 14 }
+  
+  # 高階市場微結構 (SMC & FVG)
+  FVG: { adapt_macro_p: 21, adapt_micro_p: 5 }
+  SMC_Context: 
+    p_left: 5
+    p_right: 5
+    liq_left: 5
+    liq_right: 5
+    liq_thresh_pct: 0.001
+    ob_p: 3
+    ob_thresh: 1.5
+    adapt_macro_p: 55
+    adapt_micro_p: 13
+    adapt_vol_p: 34
+
+# ----------------------------------------------------------------------------
+# §4 Lite 版寬表出戰名單 (The Wide Table Roster for Tree Models)
+# [說明]: 放棄頻譜全展開，改用特定週期的精兵策略，交由 LightGBM 進行審判。
+# ----------------------------------------------------------------------------
+meta_features_plan:
+  # --- 群組 1: 基礎動能 (Momentum) ---
+  - { id: 'MACD', indicator: 'MACD' }
+  - { id: 'RSI', indicator: 'RSI' }
+  - { id: 'ATR', indicator: 'ATR' }
+  
+  # --- 群組 2: 通道與擠壓 (Bands & Squeeze) ---
+  - { id: 'Bollinger_Bands', indicator: 'Bollinger_Bands' }
+  
+  # --- 群組 3: 聰明錢與市場微結構 (SMC & FVG) ---
+  - { id: 'Structure_SMC', indicator: 'SMC_Context' }
+  - { id: 'FVG_Zones', indicator: 'FVG' }
+
+# ----------------------------------------------------------------------------
+# §5 Layer 1.5 審判庭憲章 (Feature Adjudicator Charter)
+# ----------------------------------------------------------------------------
+adjudicator_trainer:
+  enabled: true
+  student_model_type: 'LightGBM'
+  objective: 'multiclass'    # 若為分類任務
+  metric: 'multi_logloss'
+  training_params:
+    learning_rate: 0.05
+    num_leaves: 31
+    feature_fraction: 0.8
+    n_estimators: 500
+    early_stopping_rounds: 50
+
+# ----------------------------------------------------------------------------
+# §6 決策層約束 (Layer 6 Decision Constraints)
+# ----------------------------------------------------------------------------
+optimization_standards:
+  max_gross_leverage: 1.0
+  max_asset_weight: 0.5
+  kelly_fraction: 0.5
+  veto_states: [0]           # 拒絕在 HMM 狀態 0 (死水期) 交易

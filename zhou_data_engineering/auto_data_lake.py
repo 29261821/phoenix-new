@@ -148,9 +148,7 @@ class ZeroTouchDataLake:
         
         # 賦予 15m 雙軌時間與 close_time
         df_15m = df_15m.with_columns([
-            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).alias("close_time"),
-            pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
-            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+            (pl.col("datetime").dt.offset_by("15m") - pl.duration(milliseconds=1)).alias("close_time")
         ])
         results = {"15m": df_15m}
         
@@ -168,9 +166,7 @@ class ZeroTouchDataLake:
             
             # 賦予聚合後 K 線的雙軌時間
             df_tf = df_tf.with_columns([
-                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time"),
-                pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
-                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+                (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time")
             ])
             results[tf] = df_tf
             
@@ -184,6 +180,13 @@ class ZeroTouchDataLake:
         asset_dir.mkdir(parents=True, exist_ok=True)
         
         for tf, df in datasets.items():
+            # 將 Datetime 類型的欄位轉換為給機器看的 UNIX Timestamp (ms) 整數
+            time_cols = [col for col, dtype in zip(df.columns, df.dtypes) if dtype in (pl.Datetime, pl.Date)]
+            if time_cols:
+                df = df.with_columns([
+                    pl.col(col).dt.timestamp("ms").alias(col) for col in time_cols
+                ])
+                
             file_path = asset_dir / f"{symbol_safe}_{exchange_safe}_{tf}.parquet"
             df.write_parquet(str(file_path))
             logger.info(f"[v] 保存完成: {file_path.name} ({len(df)} 筆)")
@@ -213,9 +216,7 @@ class ZeroTouchDataLake:
                     (pl.col("close").is_not_null() & (pl.col("volume") > 0)).alias("features_mask"),
                     pl.when(pl.col("close").is_null()).then(3).otherwise(0).cast(pl.Int8).alias("features_reason"),
                 ]).with_columns([
-                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).alias("close_time"),
-                    pl.col("datetime").dt.timestamp("ms").alias("datetime_ms"),
-                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).dt.timestamp("ms").alias("close_time_ms")
+                    (pl.col("datetime").dt.offset_by("1d") - pl.duration(milliseconds=1)).alias("close_time")
                 ])
                 datasets["1d"] = raw_1d_df
 

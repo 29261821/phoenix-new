@@ -22,8 +22,9 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
-from src.features.functions.atr import calculate as atr
+from core.layer1_data.features_library.functions.atr import calculate as atr
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -57,29 +58,35 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     dn_band_np = df_with_bands["dn_band"].to_numpy()
 
     n = len(df)
-    direction_np = np.ones(n, dtype=np.int8)
-    trend_np = np.zeros(n, dtype=np.float64)
+    
+    @njit(nogil=True)
+    def _compute_supertrend(n, close_np, up_band_np, dn_band_np):
+        direction_np = np.ones(n, dtype=np.int8)
+        trend_np = np.zeros(n, dtype=np.float64)
+        prev_direction = 1
+        prev_trend = 0.0
 
-    prev_direction = 1
-    prev_trend = 0.0
+        for i in range(1, n):
+            if close_np[i] > prev_trend:
+                direction_np[i] = 1
+            else:
+                direction_np[i] = -1
 
-    for i in range(1, n):
-        if close_np[i] > prev_trend:
-            direction_np[i] = 1
-        else:
-            direction_np[i] = -1
+            if direction_np[i] == 1 and prev_direction == -1:
+                trend_np[i] = up_band_np[i]
+            elif direction_np[i] == -1 and prev_direction == 1:
+                trend_np[i] = dn_band_np[i]
+            elif direction_np[i] == 1:
+                trend_np[i] = max(up_band_np[i], prev_trend)
+            else:
+                trend_np[i] = min(dn_band_np[i], prev_trend)
 
-        if direction_np[i] == 1 and prev_direction == -1:
-            trend_np[i] = up_band_np[i]
-        elif direction_np[i] == -1 and prev_direction == 1:
-            trend_np[i] = dn_band_np[i]
-        elif direction_np[i] == 1:
-            trend_np[i] = max(up_band_np[i], prev_trend)
-        else:
-            trend_np[i] = min(dn_band_np[i], prev_trend)
+            prev_direction = direction_np[i]
+            prev_trend = trend_np[i]
+            
+        return direction_np, trend_np
 
-        prev_direction = direction_np[i]
-        prev_trend = trend_np[i]
+    direction_np, trend_np = _compute_supertrend(n, close_np, up_band_np, dn_band_np)
 
     return {
         "type": "vector",

@@ -20,10 +20,11 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
-from src.features.functions.highest import calculate as highest
-from src.features.functions.lowest import calculate as lowest
-from src.features.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.highest import calculate as highest
+from core.layer1_data.features_library.functions.lowest import calculate as lowest
+from core.layer1_data.features_library.functions.shift import calculate as prev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -55,20 +56,26 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     n = len(df)
     trend_np = np.zeros(n, dtype=np.int8)
 
-    # 3. 初始化狀態 (100% 復刻 `var: trend(0);` 的 .fill_null(0) 行為)
-    prev_trend = 0
+    # 4. 執行迭代計算 (Numba JIT 優化)
+    @njit(nogil=True)
+    def _compute_donchian_trend(n, close_np, prev_upper_np, prev_lower_np):
+        trend_np = np.zeros(n, dtype=np.int8)
+        prev_trend = 0
+        
+        for i in range(n):
+            if close_np[i] > prev_upper_np[i] and prev_upper_np[i] != 0:
+                trend_np[i] = 1
+            elif close_np[i] < prev_lower_np[i] and prev_lower_np[i] != 0:
+                trend_np[i] = -1
+            else:
+                trend_np[i] = prev_trend
 
-    # 4. 執行迭代計算
-    for i in range(n):
-        if close_np[i] > prev_upper_np[i] and prev_upper_np[i] != 0:
-            trend_np[i] = 1
-        elif close_np[i] < prev_lower_np[i] and prev_lower_np[i] != 0:
-            trend_np[i] = -1
-        else:
-            trend_np[i] = prev_trend
+            # 更新狀態以供下一次迭代使用
+            prev_trend = trend_np[i]
+            
+        return trend_np
 
-        # 更新狀態以供下一次迭代使用
-        prev_trend = trend_np[i]
+    trend_np = _compute_donchian_trend(n, close_np, prev_upper_np, prev_lower_np)
 
     return {
         "type": "event",

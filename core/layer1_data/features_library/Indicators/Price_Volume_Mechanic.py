@@ -23,7 +23,7 @@ from typing import Any, Dict
 
 import polars as pl
 
-from src.features.functions.sma import calculate as sma
+from core.layer1_data.features_library.functions.sma import calculate as sma
 
 
 def calculate(df: pl.DataFrame, params: Dict[str, Any], **kwargs) -> Dict[str, pl.Expr]:

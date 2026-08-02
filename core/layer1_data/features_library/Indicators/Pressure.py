@@ -24,10 +24,10 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.atr import calculate as atr
-from src.features.functions.ema import calculate as ema
-from src.features.functions.sma import calculate as sma
-from src.features.functions.stddev import calculate as stddev
+from core.layer1_data.features_library.functions.atr import calculate as atr
+from core.layer1_data.features_library.functions.ema import calculate as ema
+from core.layer1_data.features_library.functions.sma import calculate as sma
+from core.layer1_data.features_library.functions.stddev import calculate as stddev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

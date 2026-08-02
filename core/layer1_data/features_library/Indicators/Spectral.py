@@ -26,7 +26,7 @@ import polars as pl
 
 # --- [v5.0 核心升級] ---
 # 導入新一代的、基於表達式的原生核心接口
-from src.features.rust_functions import rolling_spectral_expr
+from core.layer1_data.features_library.functions.rust_functions import rolling_spectral_expr
 
 
 def calculate(df: pl.DataFrame, params: Dict[str, Any], **kwargs) -> Dict[str, pl.Expr]:

@@ -22,7 +22,7 @@ import polars as pl
 
 # 遵照 DSL v6.0 (邏輯自治版) 的設計思想，此指標為「自產自銷」。
 # 它不依賴 functions/cmf.py，而是將邏輯內化，以確保指標的獨立性和可讀性。
-from src.features.functions.sum import calculate as rolling_sum
+from core.layer1_data.features_library.functions.sum import calculate as rolling_sum
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

@@ -28,12 +28,13 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
-from src.features.functions.abs import calculate as abs_val
-from src.features.functions.atr import calculate as atr
-from src.features.functions.pivots import calculate as pivots
-from src.features.functions.shift import calculate as prev
-from src.features.functions.sum import calculate as rolling_sum
+from core.layer1_data.features_library.functions.abs import calculate as abs_val
+from core.layer1_data.features_library.functions.atr import calculate as atr
+from core.layer1_data.features_library.functions.pivots import calculate as pivots
+from core.layer1_data.features_library.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.sum import calculate as rolling_sum
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -148,40 +149,52 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     bear_ob_bottom_np = df_with_triggers["potential_bear_ob_bottom"].to_numpy()
 
     n = len(df)
-    is_bullish_ob_np = np.zeros(n, dtype=bool)
-    is_bearish_ob_np = np.zeros(n, dtype=bool)
-
-    active_bull_ob = {"top": np.nan, "bottom": np.nan, "valid": False}
-    active_bear_ob = {"top": np.nan, "bottom": np.nan, "valid": False}
-
-    for i in range(n):
-        if active_bull_ob["valid"]:
-            if low_np[i] < active_bull_ob["bottom"]:
-                active_bull_ob["valid"] = False
-            else:
+    
+    @njit(nogil=True)
+    def _compute_ob_states(n, high_np, low_np, is_new_bull_ob_np, is_new_bear_ob_np, 
+                           bull_ob_top_np, bull_ob_bottom_np, bear_ob_top_np, bear_ob_bottom_np):
+        is_bullish_ob_np = np.zeros(n, dtype=np.bool_)
+        is_bearish_ob_np = np.zeros(n, dtype=np.bool_)
+        
+        active_bull_valid = False
+        active_bull_top = np.nan
+        active_bull_bottom = np.nan
+        
+        active_bear_valid = False
+        active_bear_top = np.nan
+        active_bear_bottom = np.nan
+        
+        for i in range(n):
+            if active_bull_valid:
+                if low_np[i] < active_bull_bottom:
+                    active_bull_valid = False
+                else:
+                    is_bullish_ob_np[i] = True
+                    
+            if active_bear_valid:
+                if high_np[i] > active_bear_top:
+                    active_bear_valid = False
+                else:
+                    is_bearish_ob_np[i] = True
+                    
+            if is_new_bull_ob_np[i]:
+                active_bull_top = bull_ob_top_np[i]
+                active_bull_bottom = bull_ob_bottom_np[i]
+                active_bull_valid = True
                 is_bullish_ob_np[i] = True
-
-        if active_bear_ob["valid"]:
-            if high_np[i] > active_bear_ob["top"]:
-                active_bear_ob["valid"] = False
-            else:
+                
+            if is_new_bear_ob_np[i]:
+                active_bear_top = bear_ob_top_np[i]
+                active_bear_bottom = bear_ob_bottom_np[i]
+                active_bear_valid = True
                 is_bearish_ob_np[i] = True
+                
+        return is_bullish_ob_np, is_bearish_ob_np
 
-        if is_new_bull_ob_np[i]:
-            active_bull_ob = {
-                "top": bull_ob_top_np[i],
-                "bottom": bull_ob_bottom_np[i],
-                "valid": True,
-            }
-            is_bullish_ob_np[i] = True
-
-        if is_new_bear_ob_np[i]:
-            active_bear_ob = {
-                "top": bear_ob_top_np[i],
-                "bottom": bear_ob_bottom_np[i],
-                "valid": True,
-            }
-            is_bearish_ob_np[i] = True
+    is_bullish_ob_np, is_bearish_ob_np = _compute_ob_states(
+        n, high_np, low_np, is_new_bull_ob_np, is_new_bear_ob_np,
+        bull_ob_top_np, bull_ob_bottom_np, bear_ob_top_np, bear_ob_bottom_np
+    )
 
     # 將 numpy 結果轉為表達式
     bull_ob_expr = pl.lit(pl.Series("isBullish", is_bullish_ob_np))

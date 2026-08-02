@@ -21,12 +21,13 @@ from typing import Any, Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
 # 此指標為【狀態機指標】，不能使用純 Polars 表達式，因其邏輯包含自我引用。
 # 必須使用迭代計算，以 100% 復刻 DSL 系統的健壯性。
-from src.features.functions.atr import calculate as atr
-from src.features.functions.highest import calculate as highest
-from src.features.functions.lowest import calculate as lowest
+from core.layer1_data.features_library.functions.atr import calculate as atr
+from core.layer1_data.features_library.functions.highest import calculate as highest
+from core.layer1_data.features_library.functions.lowest import calculate as lowest
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, Any]:
@@ -65,15 +66,18 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, Any]:
     prev_long_stop = 0.0
     prev_short_stop = 0.0
 
-    # 4. 執行迭代計算
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
+    # 4. 執行迭代計算 (Numba JIT 優化)
+    @njit(nogil=True)
+    def _compute_chandelier(n, close_np, atr_np, highest_high_np, lowest_low_np, multiplier):
+        long_stop_np = np.full(n, np.nan)
+        short_stop_np = np.full(n, np.nan)
+        prev_long_stop = 0.0
+        prev_short_stop = 0.0
+        
         for i in range(n):
             potential_long = highest_high_np[i] - (atr_np[i] * multiplier)
-            potential_short = lowest_low_np[i] + (
-                atr_np[i] * multiplier
-            )  # 修正: 熊市止損應為 low + atr
-
+            potential_short = lowest_low_np[i] + (atr_np[i] * multiplier)
+            
             long_stop_new = (
                 max(potential_long, prev_long_stop)
                 if prev_long_stop != 0.0
@@ -97,6 +101,14 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, Any]:
 
             prev_long_stop = long_stop_np[i]
             prev_short_stop = short_stop_np[i]
+            
+        return long_stop_np, short_stop_np
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        long_stop_np, short_stop_np = _compute_chandelier(
+            n, close_np, atr_np, highest_high_np, lowest_low_np, multiplier
+        )
 
     return {
         "type": "level",

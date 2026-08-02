@@ -22,9 +22,10 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
-from src.features.functions.pivots import calculate as pivots
-from src.features.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.pivots import calculate as pivots
+from core.layer1_data.features_library.functions.shift import calculate as prev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -67,16 +68,20 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     is_event_np = df.select(is_event_expr.alias("is_event"))["is_event"].to_numpy()
 
     n = len(df)
-    bars_since_event_np = np.zeros(n, dtype=np.int32)
+    
+    @njit(nogil=True)
+    def _compute_prop(n, is_event_np):
+        bars_since_event_np = np.zeros(n, dtype=np.int32)
+        prev_bars = 0
+        for i in range(n):
+            if is_event_np[i]:
+                bars_since_event_np[i] = 0
+            else:
+                bars_since_event_np[i] = prev_bars + 1
+            prev_bars = bars_since_event_np[i]
+        return bars_since_event_np
 
-    prev_bars = 0
-
-    for i in range(n):
-        if is_event_np[i]:
-            bars_since_event_np[i] = 0
-        else:
-            bars_since_event_np[i] = prev_bars + 1
-        prev_bars = bars_since_event_np[i]
+    bars_since_event_np = _compute_prop(n, is_event_np)
 
     return {
         "type": "scalar",

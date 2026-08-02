@@ -19,6 +19,7 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -39,17 +40,22 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
         df["close"].to_numpy(),
     )
     n = len(df)
-    ha_open = np.zeros(n)
-    ha_close = (o + h + l + c) / 4.0
+    
+    @njit(nogil=True)
+    def _compute_ha(n, o, h, l, c):
+        ha_open = np.zeros(n)
+        ha_close = (o + h + l + c) / 4.0
 
-    if n > 0:
-        ha_open[0] = (o[0] + c[0]) / 2.0
+        if n > 0:
+            ha_open[0] = (o[0] + c[0]) / 2.0
+            for i in range(1, n):
+                ha_open[i] = (ha_open[i - 1] + ha_close[i - 1]) / 2.0
+                
+        ha_high = np.maximum(np.maximum(h, ha_open), ha_close)
+        ha_low = np.minimum(np.minimum(l, ha_open), ha_close)
+        return ha_open, ha_close, ha_high, ha_low
 
-        for i in range(1, n):
-            ha_open[i] = (ha_open[i - 1] + ha_close[i - 1]) / 2.0
-
-    ha_high = np.maximum.reduce([h, ha_open, ha_close])
-    ha_low = np.minimum.reduce([l, ha_open, ha_close])
+    ha_open, ha_close, ha_high, ha_low = _compute_ha(n, o, h, l, c)
 
     return {
         "type": "vector",

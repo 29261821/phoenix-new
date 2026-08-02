@@ -25,8 +25,8 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.ema import calculate as ema
-from src.features.functions.stddev import calculate as stddev
+from core.layer1_data.features_library.functions.ema import calculate as ema
+from core.layer1_data.features_library.functions.stddev import calculate as stddev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

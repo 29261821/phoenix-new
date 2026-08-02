@@ -20,11 +20,17 @@
 - 透過 adapt_micro_p 計算柱狀圖的加速度，極致敏銳地捕捉動能衰竭。
 - 透過 adapt_vol_p 計算 MACD 波動率，識別大行情啟動前的動能收斂。
 """
-from typing import Dict
+from typing import Dict, Any
 
 import polars as pl
 
-from src.features.functions.ema import calculate as ema
+# 聲明本指標之參數合約約束 (提供 Layer 1.5 搜尋空間動態讀取，無硬編碼)
+PARAM_CONSTRAINTS = {
+    "fast_slow_pairs": [("fast_period", "slow_period")],
+}
+
+
+from core.layer1_data.features_library.functions.ema import calculate as ema
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

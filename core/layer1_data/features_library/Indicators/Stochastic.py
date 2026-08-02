@@ -24,9 +24,9 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.highest import calculate as highest
-from src.features.functions.lowest import calculate as lowest
-from src.features.functions.sma import calculate as sma
+from core.layer1_data.features_library.functions.highest import calculate as highest
+from core.layer1_data.features_library.functions.lowest import calculate as lowest
+from core.layer1_data.features_library.functions.sma import calculate as sma
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

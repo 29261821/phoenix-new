@@ -1,12 +1,26 @@
-import ccxt.async_support as ccxt_async  # SOTA 升級: 導入非同步 CCXT
+import ccxt.async_support as ccxt_async
 import polars as pl
 import os
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, Optional, List
 from dotenv import load_dotenv
 from pathlib import Path
 import logging
+import yaml
+import argparse
+import sys
+
+# 確保可以直接在目錄下執行
+project_root = str(Path(__file__).resolve().parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# SOTA 升級: 動態在地時區解析
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 # 載入 .env 檔案中的環境變數
 load_dotenv()
@@ -14,15 +28,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("DataLakeBuilder")
 
 class DataLakeBuilder:
-    def __init__(self, data_dir: Optional[str] = None):
+    def __init__(self, data_dir: Optional[str] = None, config_dir: Optional[str] = None):
         """
         初始化非同步資料湖建構器
         """
+        project_root = Path(__file__).resolve().parent.parent.parent
+        
         if data_dir is None:
-            project_root = Path(__file__).resolve().parent.parent.parent
             self.data_dir = project_root / "infra" / "data_lake" / "parquet_store"
         else:
             self.data_dir = Path(data_dir)
+            
+        if config_dir is None:
+            self.config_dir = project_root / "configs" / "assets"
+        else:
+            self.config_dir = Path(config_dir)
             
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
@@ -47,33 +67,92 @@ class DataLakeBuilder:
         """關閉非同步連線"""
         await self.exchange.close()
 
-    async def fetch_historical_1m_async(self, asset: str, start_date: str, end_date: str) -> pl.DataFrame:
+    def load_asset_config(self, asset: str) -> dict:
+        symbol_safe = asset.replace("/", "_")
+        config_path = self.config_dir / f"{symbol_safe}.yaml"
+        if not config_path.exists():
+            logger.warning(f"[{asset}] 找不到設定檔 {config_path}，使用系統預設 1m 基準。")
+            return {"base_timeframe": "1m", "macro_timeframes": ["5m", "15m", "1h", "1d"]}
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def get_fetch_start_time(self, asset: str, config: dict, force_rebuild: bool) -> str:
+        """
+        [SOTA 升級] 智慧增量時間錨定
+        若存在本地檔案，讀取最後時間點進行增量更新。
+        若無，解析 YAML 中指定的起點，並精確根據商品當地時區 (Session) 轉換為 UTC。
+        """
+        symbol_safe = asset.replace("/", "_")
+        base_timeframe = config.get("base_timeframe", "1m")
+        file_path = self.data_dir / symbol_safe / f"{symbol_safe}_{base_timeframe}.parquet"
+        
+        # 1. 取得商品專屬時區 (Fallbacks to UTC)
+        tz_str = "UTC"
+        if "target_assets" in config and asset in config["target_assets"]:
+            tz_str = config["target_assets"][asset].get("timezone", "UTC")
+        try:
+            tz = ZoneInfo(tz_str)
+        except Exception:
+            logger.warning(f"[{asset}] 時區 {tz_str} 無效，退回 UTC。")
+            tz = timezone.utc
+            
+        # 2. 增量更新邏輯
+        if not force_rebuild and file_path.exists():
+            try:
+                df_last = pl.read_parquet(file_path, columns=["datetime"])
+                last_dt = df_last["datetime"].max()
+                
+                # 將 Naive DateTime (從 epoch 轉換來) 視為 UTC，並格式化為 CCXT 接受的 ISO8601
+                last_dt_utc = last_dt.replace(tzinfo=timezone.utc)
+                iso_start = last_dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                logger.info(f"[{asset}] 偵測到既有資料，啟動增量更新，起點: {iso_start}")
+                return iso_start
+            except Exception as e:
+                logger.warning(f"[{asset}] 讀取既有 Parquet 失敗 ({e})，轉為全量更新。")
+        
+        # 3. 首次建構邏輯 (Cold Start)
+        train_start_str = "2024-01-01 00:00:00"
+        if "dataset_boundaries" in config and "train_start" in config["dataset_boundaries"]:
+            train_start_str = config["dataset_boundaries"]["train_start"]
+            
+        # 套用當地時區 (Local Time -> UTC)
+        dt_local = datetime.strptime(train_start_str, "%Y-%m-%d %H:%M:%S")
+        dt_local = dt_local.replace(tzinfo=tz)
+        dt_utc = dt_local.astimezone(timezone.utc)
+        
+        iso_start = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        logger.info(f"[{asset}] 首次建構 (或強制重建)，起點: {train_start_str} ({tz_str}) -> {iso_start} (UTC)")
+        return iso_start
+
+    async def fetch_historical_base_async(self, asset: str, start_utc: str, end_utc: str, base_timeframe: str) -> pl.DataFrame:
         """
         [SOTA 非同步抓取] 具備指數退避重試的極速歷史拉取
         """
-        logger.info(f"[*] 開始抓取 {asset} 1m 數據 ({start_date} to {end_date})...")
+        logger.info(f"[*] 開始抓取 {asset} {base_timeframe} 數據 ({start_utc} to {end_utc})...")
         
-        since = self.exchange.parse8601(f"{start_date}T00:00:00Z")
-        until = self.exchange.parse8601(f"{end_date}T00:00:00Z")
+        since = self.exchange.parse8601(start_utc)
+        until = self.exchange.parse8601(end_utc)
         
         all_ohlcv = []
         current_since = since
         max_retries = 5
         
+        tf_ms = self.exchange.parse_timeframe(base_timeframe) * 1000
+        
         while current_since < until:
             retries = 0
             while retries < max_retries:
                 try:
-                    ohlcv = await self.exchange.fetch_ohlcv(asset, '1m', since=current_since, limit=1000)
+                    # 如果該資產在幣安不存在，這裡會拋出 ccxt.BadSymbol，將由外層 catch 處理
+                    ohlcv = await self.exchange.fetch_ohlcv(asset, base_timeframe, since=current_since, limit=1000)
                     if not ohlcv:
-                        break # 資料抓完了
+                        break
                     
                     all_ohlcv.extend(ohlcv)
-                    current_since = ohlcv[-1][0] + 60000 
+                    current_since = ohlcv[-1][0] + tf_ms 
                     
-                    # 遵守交易所的 Rate Limit，讓出 Event Loop 控制權
                     await asyncio.sleep(self.exchange.rateLimit / 1000)
-                    break # 成功抓取，跳出重試迴圈
+                    break
                     
                 except ccxt_async.RateLimitExceeded:
                     wait_time = 2 ** retries
@@ -84,6 +163,9 @@ class DataLakeBuilder:
                     logger.warning(f"[{asset}] 網路異常: {e}，重試中...")
                     await asyncio.sleep(2 ** retries)
                     retries += 1
+                except ccxt_async.BadSymbol as e:
+                    logger.error(f"[{asset}] 交易對不存在或不支援: {e}")
+                    raise e
                 except Exception as e:
                     logger.error(f"[{asset}] 致命錯誤: {e}")
                     raise e
@@ -95,13 +177,16 @@ class DataLakeBuilder:
         df = pl.DataFrame(all_ohlcv, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row")
         return df.with_columns(pl.from_epoch(pl.col("timestamp"), time_unit="ms").alias("datetime"))
 
-    def apply_missingness_encoding(self, df: pl.DataFrame) -> pl.DataFrame:
-        """三維遺失編碼器 (同步 CPU 運算)"""
+    def apply_missingness_encoding(self, df: pl.DataFrame, base_timeframe: str) -> pl.DataFrame:
+        """三維遺失編碼器 (動態 Base Timeframe)"""
+        if len(df) == 0:
+            return df
+            
         start_dt = df["datetime"].min()
         end_dt = df["datetime"].max()
         
         continuous_time = pl.DataFrame({
-            "datetime": pl.datetime_range(start_dt, end_dt, "1m", eager=True).cast(pl.Datetime("ms"))
+            "datetime": pl.datetime_range(start_dt, end_dt, base_timeframe, eager=True).cast(pl.Datetime("ms"))
         })
         
         df_aligned = continuous_time.join(df, on="datetime", how="left")
@@ -120,27 +205,18 @@ class DataLakeBuilder:
             pl.col("timestamp").fill_null(strategy="forward").fill_null(0) 
         ])
 
-    def generate_multi_timeframes(self, df_1m: pl.DataFrame) -> Dict[str, pl.DataFrame]:
+    def generate_multi_timeframes(self, df_base: pl.DataFrame, base_timeframe: str, macro_timeframes: List[str]) -> Dict[str, pl.DataFrame]:
         """
         [SOTA 升級] 多時間尺度重採樣，並強制寫入物理結束時間 (Close Time)
         """
-        timeframes = ["1m", "5m", "15m", "1h", "1d"]
-        
-        # ==============================================================================
-        # 🚨 [防未來視鋼印] 生成 close_time
-        # 將「這根 K 線何時才算真正結束」的因果律，直接寫死在 Parquet 檔案的硬碟裡。
-        # 未來的 Aligner 只能依賴這個 close_time 進行 Backward Join。
-        # ==============================================================================
-        
-        # 1. 賦予基準 1m 線 close_time (e.g., 10:00 的線，close_time 是 10:00:59.999)
-        df_1m = df_1m.with_columns(
-            (pl.col("datetime").dt.offset_by("1m") - pl.duration(milliseconds=1)).alias("close_time")
+        # 1. 賦予基準 K 線 close_time
+        df_base = df_base.with_columns(
+            (pl.col("datetime").dt.offset_by(base_timeframe) - pl.duration(milliseconds=1)).alias("close_time")
         )
-        results = {"1m": df_1m}
+        results = {base_timeframe: df_base}
         
-        for tf in timeframes[1:]:
-            # Polars group_by_dynamic 預設以區間的起始點 (Open Time) 作為標籤
-            df_tf = df_1m.group_by_dynamic("datetime", every=tf).agg([
+        for tf in macro_timeframes:
+            df_tf = df_base.group_by_dynamic("datetime", every=tf).agg([
                 pl.col("open").first(),
                 pl.col("high").max(),
                 pl.col("low").min(),
@@ -150,7 +226,7 @@ class DataLakeBuilder:
                 pl.col("features_reason").max() 
             ])
             
-            # 2. 賦予宏觀 K 線 close_time (e.g., 10:00 的 5m 線，close_time 是 10:04:59.999)
+            # 2. 賦予宏觀 K 線 close_time
             df_tf = df_tf.with_columns(
                 (pl.col("datetime").dt.offset_by(tf) - pl.duration(milliseconds=1)).alias("close_time")
             )
@@ -169,48 +245,105 @@ class DataLakeBuilder:
             df.write_parquet(str(file_path))
             logger.info(f"[v] 保存完成: {file_path.name} ({len(df)} 筆)")
 
-    async def process_single_asset(self, asset: str, start_date: str, end_date: str):
+    async def process_single_asset(self, asset: str, force_rebuild: bool = False):
         """單一資產的完整生命週期管線"""
-        # 1. 網路 I/O: 非同步抓取
-        raw_1m_df = await self.fetch_historical_1m_async(asset, start_date, end_date)
+        config = self.load_asset_config(asset)
+        base_timeframe = config.get("base_timeframe", "1m")
+        macro_timeframes = config.get("macro_timeframes", ["5m", "15m", "1h", "1d"])
+
+        start_utc = self.get_fetch_start_time(asset, config, force_rebuild)
+        end_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
-        if len(raw_1m_df) == 0:
-            logger.warning(f"[{asset}] 無資料可處理。")
+        # 1. 網路 I/O: 抓取最新原始資料
+        raw_base_df = await self.fetch_historical_base_async(asset, start_utc, end_utc, base_timeframe)
+        
+        if len(raw_base_df) == 0:
+            logger.info(f"[{asset}] 已是最新，無新資料可更新。")
             return
 
-        # 2. CPU 密集型: 標記、降維、縫合 (使用極速 Polars)
-        encoded_1m_df = self.apply_missingness_encoding(raw_1m_df)
-        multi_tf_datasets = self.generate_multi_timeframes(encoded_1m_df)
+        # 🚨 [SOTA 防爆機制] 剔除未收盤 K 線
+        # 防止未來視與殘缺的特徵破壞神經網路的收斂
+        current_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        tf_ms = self.exchange.parse_timeframe(base_timeframe) * 1000
+        raw_base_df = raw_base_df.filter((pl.col("timestamp") + tf_ms) <= current_time_ms)
         
-        # 3. 磁碟 I/O: 儲存
+        if len(raw_base_df) == 0:
+            logger.info(f"[{asset}] 抓取到的最新 K 線皆未物理收盤，本次無靜態更新。")
+            return
+
+        # 2. CPU 密集型: 缺失編碼
+        encoded_new_df = self.apply_missingness_encoding(raw_base_df, base_timeframe)
+        
+        # 3. 增量縫合邏輯
+        symbol_safe = asset.replace("/", "_")
+        file_path = self.data_dir / symbol_safe / f"{symbol_safe}_{base_timeframe}.parquet"
+        
+        if not force_rebuild and file_path.exists():
+            old_df = pl.read_parquet(file_path)
+            if "close_time" in old_df.columns:
+                old_df = old_df.drop("close_time")
+            # vstack 並透過 datetime 嚴格去重，保留最新 (last) 抓取的修正資料
+            encoded_base_df = old_df.vstack(encoded_new_df).unique(subset=["datetime"], keep="last").sort("datetime")
+            logger.info(f"[{asset}] 增量縫合完畢，總資料筆數增長至: {len(encoded_base_df)}")
+        else:
+            encoded_base_df = encoded_new_df
+
+        # 4. 產生多尺度 (Polars 極速全量重採樣)
+        multi_tf_datasets = self.generate_multi_timeframes(encoded_base_df, base_timeframe, macro_timeframes)
+        
+        # 5. 磁碟 I/O: 儲存
         self.save_to_datalake(asset, multi_tf_datasets)
 
-    async def build_multi_asset_lake(self, assets: List[str], start_date: str, end_date: str):
+    async def build_multi_asset_lake(self, assets: List[str], force_rebuild: bool = False):
         """
-        [多核極限] 同時併發下載與處理多檔資產
+        [多核極限] 同時併發下載與處理多檔資產，包含 MCP 級解耦與錯誤隔離
         """
         logger.info(f"[🚀] 啟動多資產非同步資料湖建構管線: {assets}")
         
-        # 使用 asyncio.gather 同時發起所有資產的下載與處理任務
-        tasks = [self.process_single_asset(asset, start_date, end_date) for asset in assets]
-        await asyncio.gather(*tasks)
-        
-        await self.close()
-        logger.info("[🏁] 所有資產資料湖建構完畢！")
+        # 使用 asyncio.gather(return_exceptions=True)
+        # 確保單一商品 (如非幣安商品或下架代幣) 引發例外時，不會中斷其他商品的下載
+        try:
+            tasks = [self.process_single_asset(asset, force_rebuild) for asset in assets]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for asset, res in zip(assets, results):
+                if isinstance(res, Exception):
+                    logger.error(f"[❌] {asset} 處理失敗，已被隔離。原因: {res}")
+        finally:
+            await self.close()
+            
+        logger.info("[🏁] 所有資產資料湖建構/更新流程完畢！")
 
 if __name__ == "__main__":
-    # 在 Windows 避免非同步報錯
+    parser = argparse.ArgumentParser(description="Phoenix Data Lake Builder (SOTA CLI)")
+    parser.add_argument("--assets", nargs="+", help="指定要抓取的商品清單 (例如 BTC/USDT ETH/USDT)。若未提供，則自動掃描 configs/assets 下所有 YAML。")
+    parser.add_argument("--force-rebuild", action="store_true", help="強制重新抓取 (忽略既有的 Parquet)，進行 Cold Start。")
+    args = parser.parse_args()
+
     import sys
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    # 想要同時抓取的資產清單 (可以無縫擴充到數十檔)
-    target_assets = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-    
-    start_str = (datetime.now(timezone.utc) - timedelta(days=2400)).strftime("%Y-%m-%d")
-    end_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    
     builder = DataLakeBuilder()
     
+    if args.assets:
+        target_assets = args.assets
+    else:
+        # 動態掃描 configs/assets/*.yaml
+        yaml_files = list(builder.config_dir.glob("*.yaml"))
+        target_assets = []
+        for yf in yaml_files:
+            try:
+                with open(yf, "r", encoding="utf-8") as f:
+                    conf = yaml.safe_load(f)
+                    if conf and "base_asset" in conf:
+                        target_assets.append(conf["base_asset"])
+            except Exception as e:
+                logger.warning(f"[!] 無法解析 {yf.name}: {e}")
+                
+        if not target_assets:
+            logger.error("[!] 未在 configs/assets 找到任何有效的 YAML 設定檔，系統退出。")
+            sys.exit(1)
+            
     # 啟動非同步事件迴圈
-    asyncio.run(builder.build_multi_asset_lake(target_assets, start_str, end_str))
+    asyncio.run(builder.build_multi_asset_lake(target_assets, force_rebuild=args.force_rebuild))

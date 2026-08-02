@@ -21,9 +21,9 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.abs import calculate as abs_val
-from src.features.functions.shift import calculate as prev
-from src.features.functions.sum import calculate as rolling_sum
+from core.layer1_data.features_library.functions.abs import calculate as abs_val
+from core.layer1_data.features_library.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.sum import calculate as rolling_sum
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

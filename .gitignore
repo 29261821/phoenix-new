@@ -1,0 +1,25 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Datastores & Parquet Cache
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+-wal
+-shm
+
+# Environment & IDE
+.env
+.venv/
+env/
+venv/
+.vscode/
+.idea/
+
+# Large Raw Data Stores (Keep dir structure if needed, ignore binary data)
+infra/data_lake/parquet_store/*
+infra/feature_store/splits/*

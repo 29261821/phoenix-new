@@ -25,12 +25,12 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.ema import calculate as ema
-from src.features.functions.highest import calculate as highest
-from src.features.functions.lowest import calculate as lowest
-from src.features.functions.max import calculate as h_max
-from src.features.functions.min import calculate as h_min
-from src.features.functions.wma import calculate as wma
+from core.layer1_data.features_library.functions.ema import calculate as ema
+from core.layer1_data.features_library.functions.highest import calculate as highest
+from core.layer1_data.features_library.functions.lowest import calculate as lowest
+from core.layer1_data.features_library.functions.max import calculate as h_max
+from core.layer1_data.features_library.functions.min import calculate as h_min
+from core.layer1_data.features_library.functions.wma import calculate as wma
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

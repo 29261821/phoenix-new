@@ -23,8 +23,8 @@ from typing import Any, Dict
 import polars as pl
 
 # [邏輯自治] 遵循 DSL v6.0 的設計思想，此指標為「自產自銷」。
-from src.features.functions.atr import calculate as atr
-from src.features.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.atr import calculate as atr
+from core.layer1_data.features_library.functions.shift import calculate as prev
 
 
 def calculate(df: pl.DataFrame, params: Dict[str, Any], **kwargs) -> Dict[str, pl.Expr]:

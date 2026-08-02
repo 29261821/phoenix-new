@@ -24,9 +24,10 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
-from src.features.functions.ema import calculate as ema
-from src.features.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.ema import calculate as ema
+from core.layer1_data.features_library.functions.shift import calculate as prev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -51,18 +52,22 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     close_np = df["close"].to_numpy()
     volume_np = df["volume"].to_numpy()
     n = len(df)
-    obv_np = np.zeros(n, dtype=np.float64)
+    
+    @njit(nogil=True)
+    def _compute_obv(n, close_np, volume_np):
+        obv_np = np.zeros(n, dtype=np.float64)
+        prev_obv = 0.0
+        for i in range(1, n):
+            if close_np[i] > close_np[i - 1]:
+                obv_np[i] = prev_obv + volume_np[i]
+            elif close_np[i] < close_np[i - 1]:
+                obv_np[i] = prev_obv - volume_np[i]
+            else:
+                obv_np[i] = prev_obv
+            prev_obv = obv_np[i]
+        return obv_np
 
-    prev_obv = 0.0
-    for i in range(1, n):
-        if close_np[i] > close_np[i - 1]:
-            obv_np[i] = prev_obv + volume_np[i]
-        elif close_np[i] < close_np[i - 1]:
-            obv_np[i] = prev_obv - volume_np[i]
-        else:
-            obv_np[i] = prev_obv
-        prev_obv = obv_np[i]
-
+    obv_np = _compute_obv(n, close_np, volume_np)
     obv_series = pl.Series("obv", obv_np)
 
     rolling_change = obv_series - prev(series=obv_series, period=obv_period)

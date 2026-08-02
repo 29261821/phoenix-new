@@ -23,8 +23,8 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.pivots import calculate as pivots
-from src.features.functions.shift import calculate as prev
+from core.layer1_data.features_library.functions.pivots import calculate as pivots
+from core.layer1_data.features_library.functions.shift import calculate as prev
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

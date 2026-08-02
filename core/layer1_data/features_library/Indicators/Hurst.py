@@ -28,7 +28,7 @@ import polars as pl
 
 # --- [v4.0 核心升級] ---
 # 導入新一代的、基於表達式的原生核心接口
-from src.features.rust_functions import rolling_hurst_expr
+from core.layer1_data.features_library.functions.hurst import calculate as hurst
 
 
 def calculate(df: pl.DataFrame, params: Dict[str, Any], **kwargs) -> Dict[str, pl.Expr]:

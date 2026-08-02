@@ -23,7 +23,13 @@ from typing import Any, Dict
 import numpy as np
 import polars as pl
 
-from src.features.functions.ema import calculate as ema
+# 聲明本指標之參數合約約束 (提供 Layer 1.5 搜尋空間動態讀取，無硬編碼)
+PARAM_CONSTRAINTS = {
+    "fast_slow_pairs": [("momentum_p", "inertia_p")],
+}
+
+
+from core.layer1_data.features_library.functions.ema import calculate as ema
 
 
 def _calculate_obv_vectorized(
@@ -61,15 +67,20 @@ def calculate(df: pl.DataFrame, params: Dict[str, Any], **kwargs) -> Dict[str, p
     - params 必須包含 'inertia_p' (慣性週期) 和 'momentum_p' (動量週期) 鍵。
     """
     # --- 1. 契約驗證與參數提取 ---
-    inertia_p: int = params.get("inertia_p")
-    momentum_p: int = params.get("momentum_p")
+    raw_inertia = params.get("inertia_p")
+    raw_momentum = params.get("momentum_p")
 
-    if not all([inertia_p, momentum_p]):
+    if not raw_inertia or not raw_momentum:
         raise ValueError("Flow_Context 的參數 'inertia_p' 和 'momentum_p' 必須被提供。")
-    if momentum_p >= inertia_p:
-        raise ValueError(
-            "Flow_Context 的契約要求 'momentum_p' (快線) 必須小於 'inertia_p' (慢線)。"
-        )
+
+    # 自適應辨識快線 (momentum) 與慢線 (inertia)
+    slow_p = max(raw_inertia, raw_momentum)
+    fast_p = min(raw_inertia, raw_momentum)
+    if fast_p == slow_p:
+        fast_p = max(1, slow_p - 1)
+
+    inertia_p = slow_p
+    momentum_p = fast_p
 
     for col in ["close", "volume"]:
         if col not in df.columns:

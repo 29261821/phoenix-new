@@ -20,7 +20,86 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
+
+@njit(nogil=True)
+def _compute_vp_core(highs, lows, volumes, bins, va_pct):
+    min_price = np.min(lows)
+    max_price = np.max(highs)
+    price_range = max_price - min_price
+    
+    if price_range < 1e-9:
+        poc_price = (min_price + max_price) / 2
+        return poc_price, max_price, min_price
+        
+    bin_size = price_range / bins
+    profile = np.zeros(bins)
+    
+    # 手動建立 bin_prices 以避免 np.arange + 浮點數操作
+    bin_prices = np.zeros(bins)
+    for i in range(bins):
+        bin_prices[i] = min_price + i * bin_size + bin_size / 2.0
+        
+    for i in range(len(highs)):
+        h = highs[i]
+        l = lows[i]
+        v = volumes[i]
+        if np.isnan(v) or v == 0:
+            continue
+            
+        start_bin = 0
+        if l > min_price:
+            start_bin = int((l - min_price) / bin_size)
+            if start_bin < 0: start_bin = 0
+            
+        end_bin = 0
+        if h > min_price:
+            end_bin = int((h - min_price) / bin_size)
+            if end_bin > bins - 1: end_bin = bins - 1
+            
+        num_bins_spanned = (end_bin - start_bin) + 1
+        
+        if num_bins_spanned > 0:
+            vol_per_bin = v / num_bins_spanned
+            for j in range(start_bin, end_bin + 1):
+                profile[j] += vol_per_bin
+                
+    total_volume = np.sum(profile)
+    if total_volume < 1e-9:
+        poc_price = (min_price + max_price) / 2
+        return poc_price, max_price, min_price
+        
+    poc_index = np.argmax(profile)
+    poc_price = bin_prices[poc_index]
+
+    target_va_volume = total_volume * va_pct
+    current_volume = profile[poc_index]
+
+    val_idx = poc_index
+    vah_idx = poc_index
+    
+    while current_volume < target_va_volume and (val_idx > 0 or vah_idx < bins - 1):
+        vah_next = vah_idx + 1
+        val_next = val_idx - 1
+
+        vol_vah = profile[vah_next] if vah_next < bins else -1.0
+        vol_val = profile[val_next] if val_next >= 0 else -1.0
+
+        if vol_vah == -1.0 and vol_val == -1.0:
+            break
+
+        if vol_vah > vol_val:
+            current_volume += vol_vah
+            vah_idx = vah_next
+        else:
+            current_volume += vol_val
+            val_idx = val_next
+
+    val_price = bin_prices[max(0, val_idx)]
+    vah_price = bin_prices[min(bins - 1, vah_idx)]
+    
+    return poc_price, vah_price, val_price
 
 def _calculate_daily_profile_for_group(df_group: pl.DataFrame) -> pl.DataFrame:
     """
@@ -43,75 +122,7 @@ def _calculate_daily_profile_for_group(df_group: pl.DataFrame) -> pl.DataFrame:
     bins = 24
     va_pct = 0.70
 
-    # --- 2. 建立價格分箱 (Binning) ---
-    min_price, max_price = np.min(lows), np.max(highs)
-    price_range = max_price - min_price
-
-    if price_range < 1e-9:  # 如果價格無波動
-        poc_price = (min_price + max_price) / 2
-        return df_group.with_columns(
-            pl.lit(poc_price).alias("poc"),
-            pl.lit(max_price).alias("vah"),
-            pl.lit(min_price).alias("val"),
-        )
-
-    bin_size = price_range / bins
-    profile = np.zeros(bins)
-    bin_prices = min_price + np.arange(bins) * bin_size + bin_size / 2
-
-    # --- 3. 將成交量分配到各個 bin ---
-    for i in range(len(highs)):
-        h, l, v = highs[i], lows[i], volumes[i]
-        if v is None or v == 0:
-            continue
-
-        start_bin = max(0, int((l - min_price) / bin_size)) if l > min_price else 0
-        end_bin = min(bins - 1, int((h - min_price) / bin_size)) if h > min_price else 0
-
-        num_bins_spanned = (end_bin - start_bin) + 1
-
-        # [v3.3] 防禦性除法
-        if num_bins_spanned > 0:
-            vol_per_bin = v / num_bins_spanned
-            for j in range(start_bin, end_bin + 1):
-                profile[j] += vol_per_bin
-
-    total_volume = np.sum(profile)
-    if total_volume < 1e-9:  # 如果無有效成交量
-        poc_price = (min_price + max_price) / 2
-        return df_group.with_columns(
-            pl.lit(poc_price).alias("poc"),
-            pl.lit(max_price).alias("vah"),
-            pl.lit(min_price).alias("val"),
-        )
-
-    # --- 4. 計算 POC 和價值區域 (Value Area) ---
-    poc_index = np.argmax(profile)
-    poc_price = bin_prices[poc_index]
-
-    target_va_volume = total_volume * va_pct
-    current_volume = profile[poc_index]
-
-    val_idx, vah_idx = poc_index, poc_index
-    while current_volume < target_va_volume and (val_idx > 0 or vah_idx < bins - 1):
-        vah_next = vah_idx + 1
-        val_next = val_idx - 1
-
-        vol_vah = profile[vah_next] if vah_next < bins else -1
-        vol_val = profile[val_next] if val_next >= 0 else -1
-
-        if vol_vah == -1 and vol_val == -1:
-            break
-
-        if vol_vah > vol_val:
-            current_volume += vol_vah
-            vah_idx = vah_next
-        else:
-            current_volume += vol_val
-            val_idx = val_next
-
-    val_price = bin_prices[max(0, val_idx)]
-    vah_price = bin_prices[min(bins - 1, vah_idx)]
+    poc_price, vah_price, val_price = _compute_vp_core(highs, lows, volumes, bins, va_pct)
 
     # --- 5. 為該組的所有 K 棒添加相同的結果 ---
     return df_group.with_columns(

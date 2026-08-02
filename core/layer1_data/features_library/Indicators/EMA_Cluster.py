@@ -17,11 +17,17 @@
 - 四條絕對均線會被轉換為無量綱的相對位置 (%Ribbon)、發散頻寬與重心乖離。
 - 透過 adapt_micro_p 決定模型對「價格穿透或跌破均線帶加速度」的敏感度。
 """
-from typing import Dict
+from typing import Dict, Any
 
 import polars as pl
 
-from src.features.functions.ema import calculate as ema
+# 聲明本指標之參數合約約束 (提供 Layer 1.5 搜尋空間動態讀取，無硬編碼)
+PARAM_CONSTRAINTS = {
+    "ordered_chains": [["len1", "len2", "len3", "len4"]],
+}
+
+
+from core.layer1_data.features_library.functions.ema import calculate as ema
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

@@ -20,9 +20,9 @@ from typing import Dict, List
 
 import polars as pl
 
-from src.features.functions.cumsum import calculate as cumsum
-from src.features.functions.pow import calculate as power
-from src.features.functions.sqrt import calculate as sqrt
+from core.layer1_data.features_library.functions.cumsum import calculate as cumsum
+from core.layer1_data.features_library.functions.pow import calculate as power
+from core.layer1_data.features_library.functions.sqrt import calculate as sqrt
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

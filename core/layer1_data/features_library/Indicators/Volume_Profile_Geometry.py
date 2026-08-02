@@ -23,8 +23,10 @@ from typing import Dict
 
 import numpy as np
 import polars as pl
+from numba import njit
 
 
+@njit(nogil=True)
 def _calculate_profile_for_window(
     highs: np.ndarray,
     lows: np.ndarray,
@@ -33,7 +35,8 @@ def _calculate_profile_for_window(
     va_pct: float,
 ) -> float:
     """為單個數據窗口計算成交量分佈的幾何形態偏移率。"""
-    min_price, max_price = np.min(lows), np.max(highs)
+    min_price = np.min(lows)
+    max_price = np.max(highs)
     price_range = max_price - min_price
 
     if price_range < 1e-9:
@@ -43,10 +46,21 @@ def _calculate_profile_for_window(
     profile = np.zeros(bins)
 
     for i in range(len(highs)):
-        h, l, v = highs[i], lows[i], volumes[i]
+        h = highs[i]
+        l = lows[i]
+        v = volumes[i]
         if v == 0: continue
-        start_bin = max(0, int((l - min_price) / bin_size))
-        end_bin = min(bins - 1, int((h - min_price) / bin_size))
+        
+        start_bin = 0
+        if l > min_price:
+            start_bin = int((l - min_price) / bin_size)
+            if start_bin < 0: start_bin = 0
+            
+        end_bin = 0
+        if h > min_price:
+            end_bin = int((h - min_price) / bin_size)
+            if end_bin > bins - 1: end_bin = bins - 1
+            
         num_bins_spanned = (end_bin - start_bin) + 1
         vol_per_bin = v / num_bins_spanned
         for j in range(start_bin, end_bin + 1):
@@ -61,12 +75,18 @@ def _calculate_profile_for_window(
     # 尋找價值區域 (Value Area) 中點
     target_va_volume = total_volume * va_pct
     current_volume = profile[poc_index]
-    val_index, vah_index = poc_index, poc_index
+    val_index = poc_index
+    vah_index = poc_index
+    
     while current_volume < target_va_volume:
-        vah_next, val_next = vah_index + 1, val_index - 1
-        vol_vah = profile[vah_next] if vah_next < bins else -1
-        vol_val = profile[val_next] if val_next >= 0 else -1
-        if vol_vah == -1 and vol_val == -1: break
+        vah_next = vah_index + 1
+        val_next = val_index - 1
+        
+        vol_vah = profile[vah_next] if vah_next < bins else -1.0
+        vol_val = profile[val_next] if val_next >= 0 else -1.0
+        
+        if vol_vah == -1.0 and vol_val == -1.0: break
+        
         if vol_vah > vol_val:
             current_volume += vol_vah
             vah_index = vah_next
@@ -74,14 +94,32 @@ def _calculate_profile_for_window(
             current_volume += vol_val
             val_index = val_next
 
-    value_area_mid_point = (vah_index + val_index) / 2
+    value_area_mid_point = (vah_index + val_index) / 2.0
     
     # 【核心優化點】：輸出 POC 相對於價值區域中點的「連續偏移率」
     # 數值範圍在 [-1, 1] 之間，0 代表平衡 (D-型)，正數為 P-型傾向，負數為 b-型傾向。
     # 這消除了離散狀態碼導致的零方差問題。
-    offset_ratio = (poc_index - value_area_mid_point) / (bins / 2 + 1e-9)
+    offset_ratio = (poc_index - value_area_mid_point) / (bins / 2.0 + 1e-9)
     
     return float(offset_ratio)
+
+@njit(nogil=True)
+def _compute_all_profiles(n, window_size, bins, va_pct, high_np, low_np, volume_np):
+    shape_values = np.zeros(n)
+    for i in range(window_size, n):
+        w_h = high_np[i-window_size:i]
+        w_l = low_np[i-window_size:i]
+        w_v = volume_np[i-window_size:i]
+        
+        has_nan = False
+        for j in range(window_size):
+            if np.isnan(w_h[j]):
+                has_nan = True
+                break
+        if has_nan: continue
+        
+        shape_values[i] = _calculate_profile_for_window(w_h, w_l, w_v, bins, va_pct)
+    return shape_values
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
@@ -102,12 +140,7 @@ def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:
     volume_np = df.get_column("volume").to_numpy()
 
     n = len(df)
-    shape_values = np.zeros(n)
-
-    for i in range(window_size, n):
-        w_h, w_l, w_v = high_np[i-window_size:i], low_np[i-window_size:i], volume_np[i-window_size:i]
-        if np.isnan(w_h).any(): continue
-        shape_values[i] = _calculate_profile_for_window(w_h, w_l, w_v, bins, va_pct)
+    shape_values = _compute_all_profiles(n, window_size, bins, va_pct, high_np, low_np, volume_np)
 
     result_series = pl.Series("ProfileShape", shape_values, dtype=pl.Float64)
     return {"type": "event", "values": {"ProfileShape": pl.lit(result_series)}}

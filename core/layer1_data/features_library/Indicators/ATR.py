@@ -19,7 +19,7 @@ from typing import Dict
 
 import polars as pl
 
-from src.features.functions.atr import calculate as atr_func
+from core.layer1_data.features_library.functions.atr import calculate as atr_func
 
 
 def calculate(df: pl.DataFrame, params: Dict, **kwargs) -> Dict[str, pl.Expr]:

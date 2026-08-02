@@ -1,0 +1,441 @@
+domain: crypto
+suite: R2NA_Lite
+system_resources:
+  max_cpu_threads: 32
+  l1_5_optuna_workers: 6
+dataset_boundaries:
+  train_start: '2024-01-01 00:00:00'
+  train_end: '2024-05-31 23:59:59'
+phase1_window:
+  warmup_bars: 300
+  training_years: 2
+base_asset: BTC/USDT
+target_assets:
+  BTC/USDT:
+    asset_id: BTC/USDT
+    asset_type: crypto
+    timezone: UTC
+    tick_size: 0.1
+  ETH/USDT:
+    asset_id: ETH/USDT
+    asset_type: crypto
+    timezone: UTC
+    tick_size: 0.01
+base_timeframe: 1m
+macro_timeframes:
+- 5m
+- 15m
+- 1h
+- 1d
+indicator_default_params:
+  1m:
+    RSI:
+      source: close
+      period: 14
+    MACD:
+      source: close
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 8
+      len2: 21
+      len3: 55
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20
+      std: 2.0
+    ATR:
+      Len: 14
+    CMF:
+      period: 20
+    Flow_Context:
+      inertia_p: 34
+      momentum_p: 13
+      has_fast_slow: true
+    Pressure:
+      bb_period: 20
+      bb_std: 2.0
+      kc_period: 20
+      atr_period: 20
+    DMI_ADX:
+      di_len: 14
+      adx_len: 14
+    FVG:
+      adapt_macro_p: 21
+      adapt_micro_p: 5
+    SMC_Context:
+      p_left: 5
+      p_right: 5
+      liq_left: 5
+      liq_right: 5
+      liq_thresh_pct: 0.001
+      ob_p: 3
+      ob_thresh: 1.5
+      adapt_macro_p: 55
+      adapt_micro_p: 13
+      adapt_vol_p: 34
+  5m:
+    RSI:
+      source: close
+      period: 14
+    MACD:
+      source: close
+      fast_period: 15
+      slow_period: 30
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 10
+      len2: 20
+      len3: 60
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20
+      std: 2.0
+    ATR:
+      Len: 14
+    CMF:
+      period: 20
+    Flow_Context:
+      inertia_p: 34
+      momentum_p: 13
+      has_fast_slow: true
+    Pressure:
+      bb_period: 20
+      bb_std: 2.0
+      kc_period: 20
+      atr_period: 20
+    DMI_ADX:
+      di_len: 14
+      adx_len: 14
+    FVG:
+      adapt_macro_p: 21
+      adapt_micro_p: 5
+    SMC_Context:
+      p_left: 4
+      p_right: 4
+      liq_left: 4
+      liq_right: 4
+      liq_thresh_pct: 0.0015
+      ob_p: 3
+      ob_thresh: 1.5
+      adapt_macro_p: 55
+      adapt_micro_p: 13
+      adapt_vol_p: 34
+  15m:
+    RSI:
+      source: close
+      period: 14
+    MACD:
+      source: close
+      fast_period: 18
+      slow_period: 35
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 13
+      len2: 34
+      len3: 89
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20
+      std: 2.0
+    ATR:
+      Len: 14
+    CMF:
+      period: 20
+    Flow_Context:
+      inertia_p: 34
+      momentum_p: 13
+      has_fast_slow: true
+    Pressure:
+      bb_period: 20
+      bb_std: 2.0
+      kc_period: 20
+      atr_period: 20
+    DMI_ADX:
+      di_len: 14
+      adx_len: 14
+    FVG:
+      adapt_macro_p: 21
+      adapt_micro_p: 5
+    SMC_Context:
+      p_left: 3
+      p_right: 3
+      liq_left: 3
+      liq_right: 3
+      liq_thresh_pct: 0.002
+      ob_p: 3
+      ob_thresh: 1.5
+      adapt_macro_p: 55
+      adapt_micro_p: 13
+      adapt_vol_p: 34
+  1h:
+    RSI:
+      source: close
+      period: 14
+    MACD:
+      source: close
+      fast_period: 20
+      slow_period: 40
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 21
+      len2: 55
+      len3: 144
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20
+      std: 2.0
+    ATR:
+      Len: 14
+    CMF:
+      period: 20
+    Flow_Context:
+      inertia_p: 34
+      momentum_p: 13
+      has_fast_slow: true
+    Pressure:
+      bb_period: 20
+      bb_std: 2.0
+      kc_period: 20
+      atr_period: 20
+    DMI_ADX:
+      di_len: 14
+      adx_len: 14
+    FVG:
+      adapt_macro_p: 13
+      adapt_micro_p: 3
+    SMC_Context:
+      p_left: 2
+      p_right: 2
+      liq_left: 2
+      liq_right: 2
+      liq_thresh_pct: 0.003
+      ob_p: 2
+      ob_thresh: 1.2
+      adapt_macro_p: 34
+      adapt_micro_p: 8
+      adapt_vol_p: 21
+  1d:
+    RSI:
+      source: close
+      period: 14
+    MACD:
+      source: close
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 10
+      len2: 20
+      len3: 50
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20
+      std: 2.0
+    ATR:
+      Len: 14
+    CMF:
+      period: 20
+    Flow_Context:
+      inertia_p: 34
+      momentum_p: 13
+      has_fast_slow: true
+    Pressure:
+      bb_period: 20
+      bb_std: 2.0
+      kc_period: 20
+      atr_period: 20
+    DMI_ADX:
+      di_len: 14
+      adx_len: 14
+    FVG:
+      adapt_macro_p: 8
+      adapt_micro_p: 2
+    SMC_Context:
+      p_left: 2
+      p_right: 2
+      liq_left: 2
+      liq_right: 2
+      liq_thresh_pct: 0.005
+      ob_p: 2
+      ob_thresh: 1.2
+      adapt_macro_p: 21
+      adapt_micro_p: 5
+      adapt_vol_p: 13
+meta_features_plan:
+- id: MACD
+  indicator: MACD
+- id: RSI
+  indicator: RSI
+- id: ATR
+  indicator: ATR
+- id: Bollinger_Bands
+  indicator: Bollinger_Bands
+- id: Structure_SMC
+  indicator: SMC_Context
+- id: FVG_Zones
+  indicator: FVG
+- id: Money_Flow
+  indicator: CMF
+- id: Flow_Context
+  indicator: Flow_Context
+- id: Pressure
+  indicator: Pressure
+- id: Trend_Regime
+  indicator: DMI_ADX
+layer1_5_optimization:
+  enabled: true
+  target_scales:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  - 1d
+  data_boundaries:
+    1m:
+      train:
+      - '2025-08-01'
+      - '2026-02-28'
+      adjudicator:
+      - '2026-03-01'
+      - '2026-04-30'
+      val:
+      - '2026-03-01'
+      - '2026-04-30'
+      test:
+      - '2026-05-01'
+      - '2026-07-21'
+    5m:
+      train:
+      - '2025-08-01'
+      - '2026-02-28'
+      adjudicator:
+      - '2026-03-01'
+      - '2026-04-30'
+      val:
+      - '2026-03-01'
+      - '2026-04-30'
+      test:
+      - '2026-05-01'
+      - '2026-07-21'
+    15m:
+      train:
+      - '2024-08-01'
+      - '2025-06-30'
+      adjudicator:
+      - '2025-07-01'
+      - '2025-12-31'
+      val:
+      - '2025-07-01'
+      - '2025-12-31'
+      test:
+      - '2026-01-01'
+      - '2026-07-21'
+    1h:
+      train:
+      - '2024-08-01'
+      - '2025-06-30'
+      adjudicator:
+      - '2025-07-01'
+      - '2025-12-31'
+      val:
+      - '2025-07-01'
+      - '2025-12-31'
+      test:
+      - '2026-01-01'
+      - '2026-07-21'
+    1d:
+      train:
+      - '2024-01-01'
+      - '2025-06-30'
+      adjudicator:
+      - '2025-07-01'
+      - '2025-12-31'
+      val:
+      - '2025-07-01'
+      - '2025-12-31'
+      test:
+      - '2026-01-01'
+      - '2026-07-21'
+  search_budget:
+    trials: 2500
+  fitness_thresholds:
+    1m:
+      min_test_psr: 0.83
+      max_sharpe_drop: 0.68
+    5m:
+      min_test_psr: 0.84
+      max_sharpe_drop: 0.66
+    15m:
+      min_test_psr: 0.86
+      max_sharpe_drop: 0.64
+    1h:
+      min_test_psr: 0.88
+      max_sharpe_drop: 0.62
+    1d:
+      min_test_psr: 0.9
+      max_sharpe_drop: 0.6
+  world_lines:
+  - id: HEBO
+    searcher: HEBO
+    proxy: Qlib_Direct_RankIC
+    fitness: Direct_RankIC_IR
+  - id: TuRBO
+    searcher: TuRBO
+    proxy: Qlib_Direct_RankIC
+    fitness: Direct_RankIC_IR
+  - id: TPE
+    searcher: TPE
+    proxy: Qlib_Direct_RankIC
+    fitness: Direct_RankIC_IR
+  - id: CMAES_Direct_RankIC
+    searcher: CMA-ES
+    proxy: Qlib_Direct_RankIC
+    fitness: Direct_RankIC_IR
+  - id: Optuna_LGBM_IC
+    searcher: Optuna
+    proxy: LightGBM
+    fitness: Inverse_Variance_RankIC
+adjudicator_trainer:
+  enabled: true
+  student_model_type: LightGBM
+  objective: multiclass
+  metric: multi_logloss
+  training_params:
+    learning_rate: 0.05
+    num_leaves: 31
+    feature_fraction: 0.8
+    n_estimators: 500
+    early_stopping_rounds: 50
+optimization_standards:
+  max_gross_leverage: 1.0
+  max_asset_weight: 0.5
+  kelly_fraction: 0.5
+  veto_states:
+  - 0
+trading_economics:
+  contract_symbol: MBT_Micro_Bitcoin_Futures
+  contract_size: 0.1
+  margin: 2000.0
+  tick_size: 5.0
+  point_value: 0.10
+  tick_value: 0.50
+  slippage_ticks: 1
+  spread_ticks: 1
+  commission_per_order: 1.50

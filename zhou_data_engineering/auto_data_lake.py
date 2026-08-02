@@ -7,7 +7,7 @@ import polars as pl
 import pandas as pd
 from tvDatafeed import TvDatafeed, Interval
 from dotenv import load_dotenv
-
+import yaml
 # 載入 .env 檔案中的環境變數
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -245,12 +245,28 @@ if __name__ == "__main__":
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    # 目標台股資產
-    target_equities = [
-        {"symbol": "2330", "exchange": "TWSE"},  # TSMC (台積電)
-        {"symbol": "2308", "exchange": "TWSE"},  # Delta Electronics (台達電)
-        {"symbol": "2454", "exchange": "TWSE"}   # MediaTek (聯發科)
-    ]
+    # 動態讀取 TW_STOCKS.yaml 來取得標的
+    yaml_path = Path(__file__).resolve().parent.parent / "configs" / "assets" / "TW_STOCKS.yaml"
+    target_equities = []
+    
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+            
+        exchange = config.get("exchange", "TWSE")
+        targets = config.get("target_assets", {})
+        
+        for symbol in targets.keys():
+            target_equities.append({"symbol": str(symbol), "exchange": exchange})
+            
+    except Exception as e:
+        logger.error(f"讀取 {yaml_path} 失敗: {e}")
+        logger.info("退回使用預設標的: 2330, 2308, 2454")
+        target_equities = [
+            {"symbol": "2330", "exchange": "TWSE"},
+            {"symbol": "2308", "exchange": "TWSE"},
+            {"symbol": "2454", "exchange": "TWSE"}
+        ]
     
     builder = ZeroTouchDataLake()
     

@@ -1,0 +1,19 @@
+# ==========================================
+# Zhou 專屬的終端機執行指令簿
+# ==========================================
+#
+# 使用方式：當你需要產出特徵時，直接將下方的指令「複製」並「貼上」到終端機執行即可。
+# 請確保你的終端機目前位於 phoenix-new (專案根目錄) 底下。
+
+# ==========================================
+# 0. 下載最新台股資料 (在建立特徵前必做)
+python3 zhou_data_engineering/auto_data_lake.py
+
+# 1. 執行台積電三檔 (2330, 2308, 2454) 的特徵管線
+python3 core/layer1_data/data_lake_builder.py --assets 2330 2308 2454
+
+# 2. 自動掃描並執行 YAML 裡面所有的標的 (如果您日後有新增股票)
+python3 core/layer1_data/data_lake_builder.py
+
+# 3. 強制重新編譯 (如果有舊的檔案卡住或你想從頭重跑)
+python3 core/layer1_data/data_lake_builder.py --assets 2330 2308 2454 --force-rebuild

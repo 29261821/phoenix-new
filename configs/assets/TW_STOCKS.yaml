@@ -1,0 +1,170 @@
+asset: "TWSE_Portfolio"
+exchange: "TWSE"
+market_type: "EQUITY"
+
+base_asset: "2330"
+target_assets:
+  "2308":
+    asset_id: "2308"
+    asset_type: "equity_index"
+    timezone: "Asia/Taipei"
+    tick_size: 0.5
+  "2330":
+    asset_id: "2330"
+    asset_type: "equity_index"
+    timezone: "Asia/Taipei"
+    tick_size: 1.0
+  "2454":
+    asset_id: "2454"
+    asset_type: "equity_index"
+    timezone: "Asia/Taipei"
+    tick_size: 5.0
+
+base_timeframe: "15m"
+macro_timeframes:
+  - "30m"
+  - "60m"
+  - "1d"
+
+market_calendar:
+  timezone: "Asia/Taipei"
+  session_breaks:
+    - start: "13:30"
+      end: "09:00"
+  weekend_closure:
+    start_day: "Friday"
+    start_time: "13:30"
+    end_day: "Monday"
+    end_time: "09:00"
+  holidays:
+    - "2026-01-01" # 元旦
+    - "2026-02-16" # 春節連假 (範例)
+    - "2026-02-17" 
+    - "2026-02-18" 
+    - "2026-02-19"
+    - "2026-02-20"
+    - "2026-02-28" # 二二八和平紀念日
+    - "2026-04-03" # 清明節
+    - "2026-04-06" # 兒童節補假
+    - "2026-05-01" # 勞動節
+    - "2026-06-19" # 端午節
+    - "2026-09-25" # 中秋節
+    - "2026-10-09" # 國慶日連假
+
+trading_economics:
+  margin: 1.0              # 現股買賣，保證金率為 100% (不融資)
+  contract_size: 1000.0    # 台灣股票一張 = 1000 股
+  tick_size: 1.0           # 預設跳動點
+  tick_value: 1000.0       # 最小跳動值 ($)
+  slippage_ticks: 1.0      # 滑價設定
+  spread_ticks: 1.0        # 買賣價差
+  commission_per_order: 0.001425 # 台股手續費率 (千分之 1.425)
+  tax_rate: 0.003          # 交易稅率 (千分之 3)
+  initial_capital: 1000000.0 # 初始資金
+
+indicator_default_params:
+  # 台股交易時間: 09:00 - 13:30 (4.5 小時 = 270 分鐘)
+  15m: 
+    RSI:
+      source: close
+      period: 18 
+    MACD:
+      source: close
+      fast_period: 18 
+      slow_period: 90 
+      signal_period: 18
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 90 
+      len2: 180 
+      len3: 360 
+      len4: 720 
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 90 
+      std: 2.0
+    ATR:
+      Len: 18
+  30m: 
+    RSI:
+      source: close
+      period: 18 
+    MACD:
+      source: close
+      fast_period: 18 
+      slow_period: 45 
+      signal_period: 9 
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 45 
+      len2: 90 
+      len3: 180 
+      len4: 360 
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 45 
+      std: 2.0
+    ATR:
+      Len: 18
+  60m: 
+    RSI:
+      source: close
+      period: 14 
+    MACD:
+      source: close
+      fast_period: 10 
+      slow_period: 22 
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 22 
+      len2: 90 
+      len3: 270 
+      len4: 540 
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 22 
+      std: 2.0
+    ATR:
+      Len: 14
+  1d:
+    RSI:
+      source: close
+      period: 14 
+    MACD:
+      source: close
+      fast_period: 12
+      slow_period: 26 
+      signal_period: 9
+      has_fast_slow: true
+    EMA_Cluster:
+      source: close
+      len1: 10 
+      len2: 20 
+      len3: 60 
+      len4: 120 
+      has_fast_slow: true
+    Bollinger_Bands:
+      source: close
+      period: 20 
+      std: 2.0
+    ATR:
+      Len: 14
+
+meta_features_plan:
+  - id: MACD
+    indicator: MACD
+  - id: RSI
+    indicator: RSI
+  - id: ATR
+    indicator: ATR
+  - id: Bollinger_Bands
+    indicator: Bollinger_Bands
+  - id: EMA_Cluster
+    indicator: EMA_Cluster

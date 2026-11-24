@@ -33,16 +33,22 @@ class ModelFactory:
             from .lstm_baseline import LSTMEncoder
             return LSTMEncoder(config)
         
+        elif config.model_type in ["timemixer++", "timemixer"]:
+            from .timemixer_plus import TimeMixerPlusEncoder
+            return TimeMixerPlusEncoder(config)
+
+        elif config.model_type == "patchtst":
+            from .patchtst_encoder import PatchTSTEncoder
+            return PatchTSTEncoder(config)
+
         # 未來其他複雜模型將在此處註冊
         elif config.model_type == "tcn":
-            # from .tcn_encoder import TCNEncoder
-            # return TCNEncoder(config)
-            raise NotImplementedError("TCN 架構即將實作")
+            from .tcn_encoder import TCNEncoder
+            return TCNEncoder(config)
             
         elif config.model_type == "mamba":
-            # from .mamba_encoder import MambaEncoder
-            # return MambaEncoder(config)
-            raise NotImplementedError("Mamba 架構即將實作")
+            from .mamba_encoder import MambaEncoder
+            return MambaEncoder(config)
             
         else:
             raise ValueError(f"不支援的模型類型: {config.model_type}")
